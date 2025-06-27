@@ -46,7 +46,6 @@ Instrucciones:
 
 7. **Notas importantes:**
    - El código está diseñado para ser modular y reproducible. Asegúrate de ejecutar los scripts en el orden indicado.
-   - **No se ha incluido una de las carpetas de gráficas**, ya que se excedía la capacidad máxima permitida para la entrega.
    - Si tienes dudas sobre el funcionamiento de algún script, revisa los comentarios dentro de los mismos.
 
 
