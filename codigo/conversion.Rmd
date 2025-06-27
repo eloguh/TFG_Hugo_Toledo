@@ -1,0 +1,119 @@
+---
+title: "conversion"
+author: "Hugo Toledo Escrivá"
+date: "2025-06-16"
+output: html_document
+---
+
+LIBRERIAS
+
+```{r}
+library(readr)
+library(dplyr)
+library(data.table)
+library(tidyr)
+
+library(rvest)
+library(httr)
+
+library(ggplot2)
+library(plotly)
+
+library(broom)
+
+library(lubridate)
+
+library(readr)
+
+library(ggplot2)
+
+library(tidyr)
+library(dplyr)
+
+
+library(kernlab)
+library(mlbench)
+
+library(gridExtra)
+
+library(lubridate)
+```
+
+
+CONVERSION DE LOS DATOS DE BAJO COSTE
+
+```{r}
+
+# Obtener todos los archivos CSV de la carpeta
+archivos <- list.files(path = "data_test", pattern = "^bajo_.*\\.csv$", full.names = TRUE)
+
+# Función para procesar cada archivo
+procesar_archivo <- function(archivo) {
+  
+  # Leer el archivo CSV
+  bajo_coste <- read_csv(archivo, show_col_types = FALSE)
+  
+  # Mostrar columnas para depuración
+  print(paste("Procesando:", basename(archivo)))
+  print(colnames(bajo_coste))
+  
+  # Verificar que todas las columnas necesarias existen
+  columnas_necesarias <- c("NO2", "CO2", "O3", "CO", "CH2O")
+  faltantes <- setdiff(columnas_necesarias, names(bajo_coste))
+  
+  if (length(faltantes) > 0) {
+    warning(paste("Archivo", basename(archivo), "omitido. Faltan columnas:", paste(faltantes, collapse = ", ")))
+    return(NULL)
+  }
+  
+  # Realizar la conversión de unidades
+  df_conv <- data.frame(
+    NO2 = bajo_coste$NO2 * 1880,
+    CO2 = bajo_coste$CO2 * 1820,
+    O3  = bajo_coste$O3  * 1962,
+    CO  = bajo_coste$CO  * 1145,
+    CH20 = bajo_coste$CH2O * 1000
+  )
+  
+  # Añadir otras columnas y categorizar VOC
+  df_conv <- cbind(
+    df_conv,
+    bajo_coste[, c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0", "Hora", "fecha", "VOC", "modid"), drop = FALSE]
+  )
+  
+  df_conv <- df_conv %>%
+    mutate(VOC_cat = case_when(
+      VOC < 0.5 ~ 0,
+      VOC >= 0.5 & VOC < 1.5 ~ 1,
+      VOC >= 1.5 & VOC < 2.5 ~ 2,
+      VOC >= 2.5 ~ 3
+    )) %>%
+    select(-VOC)
+  
+  return(df_conv)
+}
+
+# Crear la carpeta "data_convers" si no existe
+if (!dir.exists("data_convers_test")) dir.create("data_convers_test")
+
+# Procesar todos los archivos y guardar el resultado
+for (archivo in archivos) {
+  df_final <- procesar_archivo(archivo)
+  
+  if (!is.null(df_final)) {
+    nombre_archivo <- gsub(".csv", "_procesado.csv", basename(archivo))
+    write_csv(df_final, file.path("data_convers_test", nombre_archivo))
+  }
+}
+
+
+```
+
+
+
+
+
+
+
+
+

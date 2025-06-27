@@ -1,0 +1,422 @@
+---
+title: "Drift"
+author: "Hugo Toledo Escrivá"
+date: "2025-06-18"
+output: html_document
+---
+LIBRERIAS
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Cargar librerías necesarias
+library(tidyverse)
+library(forecast)
+library(tseries)
+library(zoo)
+library(ggplot2)
+library(viridis)
+library(ggplot2)
+library(viridis)
+library(dplyr)
+library(tidyr)
+```
+
+
+#Lectura de los datos
+```{r}
+
+# Lista de archivos
+archivos <- list.files(path = "data_convers/", pattern = "procesado.*\\.csv", full.names = TRUE)
+
+# Leer todos los archivos y guardarlos en una lista
+lista_dfs <- lapply(archivos, read_csv)
+
+# Añadir un identificador de módulo a cada data.frame
+lista_dfs <- Map(function(df, i) {
+  df %>% mutate(modulo = paste0("modulo_", i))
+}, lista_dfs, seq_along(lista_dfs))
+
+# Unificar todos los data.frames en uno solo
+df_unificado <- bind_rows(lista_dfs)
+
+
+sensoro <- read.csv("data/oficial.csv")
+```
+
+
+
+#Seleccionamos las variables a estudio más el módulo
+```{r}
+sensorb_filtrado <- df_unificado %>%
+  select(modulo, PM2.5, O3, NO2, fecha)
+
+sensorb_filtrado <- as.data.frame(sensorb_filtrado)
+
+sensoro_filtrado <- sensoro %>%
+  select(PM2.5, Ozono, NO2, fecha)
+
+sensoro_filtrado <- as.data.frame(sensoro_filtrado)
+```
+
+
+
+```{r}
+# --- Selección de módulo ---
+modulo_objetivo <- "modulo_5"
+
+# Filtrar datos del módulo
+sensor_mod <- sensorb_filtrado %>%
+  filter(modulo == modulo_objetivo) %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  select(fecha, PM2.5, O3, NO2)
+
+# Sensor oficial
+sensor_ref <- sensoro_filtrado %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  select(fecha, PM2.5_ref = PM2.5, O3_ref = Ozono, NO2_ref = NO2)
+
+```
+
+
+```{r}
+
+# Paso 1: agregar por día en ambos
+mod_diario <- sensor_mod %>%
+  group_by(fecha) %>%
+  summarise(
+    pm25_mod = mean(PM2.5, na.rm = TRUE),
+    o3_mod = mean(O3, na.rm = TRUE),
+    no2_mod = mean(NO2, na.rm = TRUE),  # Añadido NO2
+    .groups = "drop"
+  )
+
+ref_diario <- sensor_ref %>%
+  group_by(fecha) %>%
+  summarise(
+    pm25_ref = mean(PM2.5_ref, na.rm = TRUE),
+    o3_ref = mean(O3_ref, na.rm = TRUE),
+    no2_ref = mean(NO2_ref, na.rm = TRUE),  # Añadido NO2
+    .groups = "drop"
+  )
+
+# Paso 2: join ya sin conflicto
+errores_diarios <- left_join(mod_diario, ref_diario, by = "fecha") %>%
+  mutate(
+    error_pm25 = pm25_mod - pm25_ref,
+    error_o3 = o3_mod - o3_ref,
+    error_no2 = no2_mod - no2_ref  # Añadido error de NO2
+  ) %>%
+  drop_na()
+
+
+
+
+# --- Series zoo (indexadas por fecha) ---
+zoo_pm25 <- zoo(errores_diarios$error_pm25, order.by = errores_diarios$fecha)
+zoo_o3   <- zoo(errores_diarios$error_o3, order.by = errores_diarios$fecha)
+zoo_no2  <- zoo(errores_diarios$error_no2, order.by = errores_diarios$fecha)  # Añadido NO2
+
+```
+
+
+```{r}
+library(ggplot2)
+library(zoo)
+
+# Crear carpeta "imagenes" si no existe
+if (!dir.exists("imagenes")) {
+  dir.create("imagenes")
+}
+
+# Convertir objetos zoo a data frames para ggplot
+df_pm25 <- data.frame(Fecha = index(zoo_pm25), Error = coredata(zoo_pm25))
+df_o3   <- data.frame(Fecha = index(zoo_o3), Error = coredata(zoo_o3))
+df_no2  <- data.frame(Fecha = index(zoo_no2), Error = coredata(zoo_no2))
+
+# Función genérica para crear gráficos
+plot_error <- function(data, titulo, archivo) {
+  p <- ggplot(data, aes(x = Fecha, y = Error)) +
+    geom_line(color = "steelblue", linewidth = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(title = titulo, x = "Fecha", y = "Error") +
+    theme_minimal(base_size = 11)
+  
+  ggsave(filename = archivo, plot = p, width = 7, height = 5)
+}
+
+# Crear y guardar los gráficos
+plot_error(df_pm25, "Error PM2.5 diario", "imagenes/error_pm25_diario.pdf")
+plot_error(df_o3,   "Error O3 diario",     "imagenes/error_o3_diario.pdf")
+plot_error(df_no2,  "Error NO2 diario",    "imagenes/error_no2_diario.pdf")
+
+# Mostrar en pantalla
+print(ggplot(df_pm25, aes(x = Fecha, y = Error)) +
+        geom_line(color = "steelblue") +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+        labs(title = "Error PM2.5 diario", x = "Fecha", y = "Error") +
+        theme_minimal())
+
+```
+
+
+```{r}
+
+
+# Crear carpeta si no existe
+if (!dir.exists("imagenes")) {
+  dir.create("imagenes")
+}
+
+# Procesar, graficar y guardar
+p <- errores_diarios %>%
+  mutate(
+    mes = format(fecha, "%Y-%m")
+  ) %>%
+  pivot_longer(
+    cols = c(error_pm25, error_o3, error_no2),
+    names_to = "variable",
+    values_to = "error"
+  ) %>%
+  mutate(
+    mes = factor(mes, levels = unique(mes)),  # Mantener orden temporal
+    variable = factor(variable, levels = c("error_pm25", "error_o3", "error_no2"),
+                      labels = c("PM2.5", "O3", "NO2"))
+  ) %>%
+  ggplot(aes(x = mes, y = error, fill = variable)) +
+  geom_boxplot(outlier.size = 0.8, alpha = 0.8, color = "gray30") +
+  facet_wrap(~variable, scales = "free_y") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 0.4) +
+  scale_fill_viridis_d(option = "C", begin = 0.2, end = 0.8) +
+  labs(
+    title = "Distribución mensual del error",
+    x = "Mes",
+    y = "Error diario (sensor - referencia)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  )
+
+# Guardar como PDF
+ggsave("imagenes/error_mensual_boxplot.pdf", plot = p, width = 10, height = 5.5)
+
+```
+
+
+
+```{r}
+# --- Sensor oficial por día ---
+sensor_ref <- sensoro_filtrado %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  group_by(fecha) %>%
+  summarise(
+    pm25_ref = mean(PM2.5, na.rm = TRUE),
+    o3_ref = mean(Ozono, na.rm = TRUE),
+    no2_ref = mean(NO2, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# --- Sensor de bajo coste: calcular errores diarios por módulo ---
+errores_diarios <- sensorb_filtrado %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  group_by(modulo, fecha) %>%
+  summarise(
+    pm25_mod = mean(PM2.5, na.rm = TRUE),
+    o3_mod = mean(O3, na.rm = TRUE),
+    no2_mod = mean(NO2, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sensor_ref, by = "fecha") %>%
+  mutate(
+    error_pm25 = pm25_mod - pm25_ref,
+    error_o3 = o3_mod - o3_ref,
+    error_no2 = no2_mod - no2_ref
+  ) %>%
+  drop_na()
+
+# --- Añadir índice temporal (número de días desde el inicio) ---
+errores_diarios <- errores_diarios %>%
+  arrange(fecha) %>%
+  mutate(dia = as.numeric(fecha - min(fecha)))
+
+# --- Calcular deriva por regresión para cada módulo ---
+
+# PM2.5
+deriva_pm25 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(deriva_pm25 = coef(lm(error_pm25 ~ dia))[2])
+
+# O3
+deriva_o3 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(deriva_o3 = coef(lm(error_o3 ~ dia))[2])
+
+# NO2
+deriva_no2 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(deriva_no2 = coef(lm(error_no2 ~ dia))[2])
+
+# --- Unir resultados ---
+deriva_modulos <- deriva_pm25 %>%
+  left_join(deriva_o3, by = "modulo") %>%
+  left_join(deriva_no2, by = "modulo")
+
+```
+
+
+
+```{r}
+# Crear carpeta si no existe
+if (!dir.exists("imagenes")) {
+  dir.create("imagenes")
+}
+
+# --- PM2.5 ---
+g_pm25 <- ggplot(errores_diarios, aes(x = dia, y = error_pm25)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  facet_wrap(~modulo) +
+  labs(title = "Evolución del error PM2.5 con regresión lineal",
+       x = "Día",
+       y = "Error PM2.5") +
+  theme_minimal()
+
+ggsave("imagenes/error_pm25_regresion.pdf", plot = g_pm25, width = 10, height = 6)
+
+
+# --- O3 ---
+g_o3 <- ggplot(errores_diarios, aes(x = dia, y = error_o3)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred") +
+  facet_wrap(~modulo) +
+  labs(title = "Evolución del error O₃ con regresión lineal",
+       x = "Día",
+       y = "Error O₃") +
+  theme_minimal()
+
+ggsave("imagenes/error_o3_regresion.pdf", plot = g_o3, width = 10, height = 6)
+
+
+# --- NO2 ---
+g_no2 <- ggplot(errores_diarios, aes(x = dia, y = error_no2)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkgreen") +
+  facet_wrap(~modulo) +
+  labs(title = "Evolución del error NO₂ con regresión lineal",
+       x = "Día",
+       y = "Error NO₂") +
+  theme_minimal()
+
+ggsave("imagenes/error_no2_regresion.pdf", plot = g_no2, width = 10, height = 6)
+
+```
+
+
+
+
+```{r}
+errores_diarios <- sensorb_filtrado %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  group_by(modulo, fecha) %>%
+  summarise(
+    pm25_mod = mean(PM2.5, na.rm = TRUE),
+    o3_mod = mean(O3, na.rm = TRUE),
+    no2_mod = mean(NO2, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(sensor_ref, by = "fecha") %>%
+  mutate(
+    error_pm25 = pm25_mod - pm25_ref,
+    error_o3 = o3_mod - o3_ref,
+    error_no2 = no2_mod - no2_ref
+  ) %>%
+  drop_na() %>%
+  arrange(fecha) %>%
+  mutate(dia = as.numeric(fecha - min(fecha)))
+
+```
+
+
+```{r}
+# Crear carpeta si no existe
+if (!dir.exists("imagenes")) {
+  dir.create("imagenes")
+}
+
+# Generar gráfico con suavizado LOESS
+g_pm25_loess <- ggplot(errores_diarios, aes(x = dia, y = error_o3)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  facet_wrap(~modulo) +
+  labs(title = "Evolución del error PM2.5 (curva suavizada)",
+       x = "Día",
+       y = "Error PM2.5") +
+  theme_minimal()
+
+# Guardar en PDF
+ggsave("imagenes/error_o3_loess.pdf", plot = g_pm25_loess, width = 10, height = 6)
+
+
+```
+
+
+
+```{r}
+# Calcular pendientes por módulo para PM2.5
+tendencia_pm25 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(tendencia_pm25 = coef(lm(error_pm25 ~ dia))[2])
+
+# Calcular pendientes por módulo para O3
+tendencia_o3 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(tendencia_o3 = coef(lm(error_o3 ~ dia))[2])
+
+# Calcular pendientes por módulo para NO2
+tendencia_no2 <- errores_diarios %>%
+  group_by(modulo) %>%
+  summarise(tendencia_no2 = coef(lm(error_no2 ~ dia))[2])
+
+# Unir las tres tablas
+tendencias_modulos <- tendencia_pm25 %>%
+  left_join(tendencia_o3, by = "modulo") %>%
+  left_join(tendencia_no2, by = "modulo")
+
+# Ranking PM2.5 (solo módulo y pendiente PM2.5)
+ranking_pm25 <- tendencias_modulos %>%
+  arrange(tendencia_pm25) %>%
+  select(modulo, tendencia_pm25)
+
+# Ranking O3 (solo módulo y pendiente O3)
+ranking_o3 <- tendencias_modulos %>%
+  arrange(tendencia_o3) %>%
+  select(modulo, tendencia_o3)
+
+# Ranking NO2 (solo módulo y pendiente NO2)
+ranking_no2 <- tendencias_modulos %>%
+  arrange(tendencia_no2) %>%
+  select(modulo, tendencia_no2)
+
+# Ver resultados
+print(ranking_pm25)
+print(ranking_o3)
+print(ranking_no2)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

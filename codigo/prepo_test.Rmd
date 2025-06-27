@@ -1,0 +1,539 @@
+---
+title: "fase1.2"
+author: "Hugo Toledo Escrivá"
+date: "2025-06-16"
+output: html_document
+---
+
+LIBRERIAS
+
+```{r}
+library(readr)
+library(dplyr)
+library(data.table)
+library(tidyr)
+
+library(rvest)
+library(httr)
+
+library(ggplot2)
+library(plotly)
+
+library(broom)
+
+library(lubridate)
+
+library(readr)
+
+library(ggplot2)
+
+library(tidyr)
+library(dplyr)
+
+
+library(kernlab)
+library(mlbench)
+
+library(gridExtra)
+
+library(lubridate)
+```
+
+
+LECTURA DATOS EN CRUDO DE BAJO COSTE
+
+```{r}
+# Define el directorio donde están los archivos
+carpeta <- "test/"
+
+# Obtiene la lista de archivos
+archivos <- list.files(carpeta, full.names = TRUE)
+
+# Itera sobre ellos y renombra si empieza por 's'
+for (archivo in archivos) {
+  nombre_archivo <- basename(archivo)
+  
+  if (startsWith(nombre_archivo, "S")) {
+    nuevo_nombre <- substring(nombre_archivo, 2)  # Quita la 's'
+    nuevo_path <- file.path(carpeta, nuevo_nombre)
+    file.rename(archivo, nuevo_path)
+    cat("Renombrado:", nombre_archivo, "→", nuevo_nombre, "\n")
+  }
+}
+
+```
+
+
+```{r}
+# Ruta del directorio con los archivos
+ruta_directorio <- "test/"
+
+# Listar todos los archivos CSV
+archivos_csv <- list.files(path = ruta_directorio, pattern = "\\.csv$", full.names = TRUE)
+```
+
+
+```{r}
+fechas_disponibles <- as.Date(gsub(".csv", "", basename(archivos_csv)))
+
+# Crear un rango completo de fechas (desde la mínima hasta la máxima)
+rango_fechas <- data.table(fecha = seq(min(fechas_disponibles), max(fechas_disponibles), by = "day"))
+
+# Marcar si cada fecha está presente o no
+rango_fechas[, disponible := fecha %in% fechas_disponibles]
+
+# Graficar
+ggplot(rango_fechas, aes(x = fecha, y = as.numeric(disponible))) +
+  geom_line(color = "steelblue") +
+  geom_point(data = rango_fechas[disponible == FALSE], aes(x = fecha, y = 0), color = "red", size = 2) +
+  scale_y_continuous(breaks = c(0, 1), labels = c("Sin datos", "Con datos")) +
+  labs(title = "Disponibilidad diaria de datos por archivo",
+       x = "Fecha", y = "Estado") +
+  theme_minimal()
+```
+
+
+```{r}
+# Identificar tramos consecutivos con datos
+rango_fechas[, grupo := cumsum(c(1, diff(disponible) != 0))]
+
+# Filtrar solo los tramos con disponible == TRUE
+tramos <- rango_fechas[disponible == TRUE, .(
+  inicio = min(fecha),
+  fin = max(fecha),
+  duracion = .N
+), by = grupo]
+
+# Encontrar el tramo más largo
+tramo_mas_largo <- tramos[which.max(duracion)]
+
+print(tramo_mas_largo)
+```
+
+
+
+```{r}
+fechas_id <- seq(as.Date("2025-01-14"), as.Date("2025-01-31"), by = "day")
+
+# Leer y concatenar archivos usando fread, asignando la fecha correspondiente a cada archivo
+sensorb <- rbindlist(
+  lapply(seq_along(archivos_csv), function(i) {
+    # Leer cada archivo CSV
+    df <- fread(archivos_csv[i], header = FALSE)
+    # Asignar la fecha de ID
+    df[, fecha := fechas_id[i]]
+    return(df)
+  }),
+
+  use.names = TRUE, fill = TRUE
+)
+
+setnames(sensorb, old = names(sensorb), new = c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0",
+                                                                      "VOC", "CH2O", "CO2", "CO", "O3", "NO2",
+                                                                      "Hora", "Minuto", "Segundo", "Modulo(ID)", "fecha"))
+sensorb$NO2 <- as.numeric(sensorb$NO2)
+
+
+ggplot(sensorb, aes(x = fecha)) +
+  geom_line(stat = "count", color = "steelblue", size = 1) +  # Graficar el conteo por fecha
+  labs(title = "Línea Temporal de Fechas en el Dataset",
+       x = "Fecha", y = "Conteo de Datos") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ 
+```
+
+
+LECTURA DATOS EN CRUDO DE OFICIAL
+
+
+En caso de que se requieran dos tramos discontinuos en el siguiente bloque puede ejecutar el siguiente rango:
+```{r}
+# Definir el rango de fechas
+fecha_inicio <- as.Date("2025-01-14")
+fecha_fin <- as.Date("2025-01-31")
+
+# Crear un vector de fechas
+fechas <- seq(fecha_inicio, fecha_fin, by = "day")
+
+# Directorio de destino para los archivos
+dir_destino <- "Ficheros_of"
+
+
+# Crear un data.frame vacío para almacenar todos los datos
+sensoro2 <- data.frame()
+
+# Bucle para descargar, leer y agregar cada archivo al data.frame principal
+for (fecha in fechas) {
+  fecha <- as.Date(fecha)
+  # Formatear la fecha como "yyyymmdd" para construir el nombre del archivo
+  fecha_formato <- format(fecha, "%Y%m%d")
+  
+  # URL y nombre de destino del archivo .dat
+  url <- paste0("https://rvvcca.gva.es/estatico/12040020/Datos/", fecha_formato, ".dat")
+  destino <- file.path(dir_destino, paste0(fecha_formato, ".dat"))
+  
+  # Descargar el archivo
+  download.file(url, destino, mode = "wb")
+  
+  # Leer el archivo descargado en un dataframe, omitiendo las primeras 4 líneas
+  datos_temp <- read_table(destino, skip = 3)
+  
+  
+  # Agregar la columna de fecha
+  datos_temp <- datos_temp %>% mutate(fecha = fecha)
+  
+  # Combinar los datos actuales con el dataframe total
+  sensoro2 <- bind_rows(sensoro2, datos_temp)
+  
+  # Eliminar el archivo descargado para evitar acumulación
+  file.remove(destino)
+}
+
+primera_fila_sensoro <- sensoro2[1, ]
+
+# Eliminar la primera fila del dataframe
+sensoro2 <- sensoro2[-1, ]
+```
+
+
+```{r}
+sensoro <- sensoro2
+
+ggplot(sensoro, aes(x = fecha)) +
+  geom_line(stat = "count", color = "steelblue", size = 1) +  # Graficar el conteo por fecha
+  labs(title = "Línea Temporal de Fechas en el Dataset",
+       x = "Fecha", y = "Conteo de Datos") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+PREPROCESADO DE DATOS
+
+#Creacion de una fecha completa y redondeo a los 10 minutos (asi estan los oficiales)
+#Creación de una lista para cada módulo
+```{r}
+
+sensorb <- sensorb %>%
+  rename(modid = `Modulo(ID)`)
+
+sensorb_a <- sensorb %>%
+  mutate(fecha_completa = make_datetime(year(fecha), month(fecha), day(fecha), Hora, Minuto, Segundo))
+
+# Paso 2: Redondear el tiempo a intervalos de 10 minutos
+sensorb_b <- sensorb_a %>%
+  mutate(intervalo_10min = floor_date(fecha_completa, unit = "10 minutes"))
+
+
+lista_por_modid <- sensorb_b %>%
+  group_split(modid)
+
+
+```
+
+
+#Calcula media para cada bloque de 10 minutos
+```{r}
+
+lista_por_modid <- lapply(lista_por_modid, as.data.table)
+
+# Aplicar la operación con data.table, muy rápida
+lista_medias <- lapply(lista_por_modid, function(dt) {
+  dt[, lapply(.SD, mean, na.rm = TRUE), by = intervalo_10min, .SDcols = is.numeric]
+})
+
+
+
+ ###########
+# Verifica si lista_por_modid tiene nombres
+if (is.null(names(lista_por_modid))) {
+  names(lista_medias) <- paste0("modid_", seq_along(lista_por_modid))
+} else {
+  names(lista_medias) <- paste0("modid_", names(lista_por_modid))
+}
+
+lista_medias <- lapply(lista_medias, function(df) {
+  df %>%
+    mutate(fecha = as.Date(intervalo_10min))  # O reemplaza con el nombre real
+})
+
+```
+
+
+
+#contamos filas por dia pra cuadrar y detectamos los dias con menos muestras
+```{r}
+# Inicializar una lista para almacenar los resultados
+lista_dias_diferentes <- list()
+
+# Iterar sobre cada DataFrame en lista_medias
+for (i in seq_along(lista_medias)) {
+  df_modid <- lista_medias[[i]]
+  
+  # Crear el DataFrame con día y número de filas por día
+  df_dia_filas <- df_modid %>%
+    mutate(dia = as.Date(intervalo_10min)) %>%  # Extraer solo la fecha
+    group_by(dia) %>%
+    summarise(filas_por_dia = n(), .groups = 'drop')  # Contar filas por día
+  
+  # Filtrar días con un número de filas diferente de 144
+  dias_diferentes <- df_dia_filas %>%
+    filter(filas_por_dia != 144) #bloques de 10 min que tiene un dia
+  
+  # Guardar los resultados en la lista
+  lista_dias_diferentes[[i]] <- dias_diferentes$dia
+}
+
+# Obtener todas las fechas con problemas en al menos un módulo
+# Unir todas las fechas y eliminar duplicados
+fechas_invalidas_unicas <- unique(do.call(c, lista_dias_diferentes))
+
+# Resultado
+print(fechas_invalidas_unicas)
+
+
+
+```
+
+
+#Lo mismo para el sensor oficial
+```{r}
+df_modid <- sensoro
+
+# Crear el DataFrame con día y número de filas por día
+df_dia_filas <- df_modid %>% # Extraer solo la fecha
+  group_by(fecha) %>%
+  summarise(filas_por_dia = n()) # Contar filas por día
+
+# Ver el resultado
+print(df_dia_filas)
+
+dias_diferentes <- df_dia_filas %>%
+  filter(filas_por_dia != 145) #aqui es 145 porque cada dia tiene un encabezado
+
+# Ver el resultado
+print(dias_diferentes)
+```
+
+
+#elimino la union de las fechas faltantes de ambos sensores
+```{r}
+
+fechas_a_eliminar <- as.Date(c("2025-01-14"))
+
+for (i in seq_along(lista_medias)) {
+  lista_medias[[i]] <- lista_medias[[i]] %>%
+    filter(!(as.Date(fecha) %in% fechas_a_eliminar)) %>%  # Eliminar fechas no deseadas
+    drop_na()                                              # Eliminar filas con cualquier NA
+}
+
+
+prueba <- lista_medias$modid_1
+```
+
+```{r}
+conteo <- prueba %>%
+  group_by(fecha) %>%
+  summarise(filas = n(), .groups = "drop")
+
+```
+
+
+
+#aqui elimino todas las fechas que tengan al menos una flag
+```{r}
+sensoro <- sensoro %>%
+  filter(!(fecha %in% fechas_a_eliminar))
+
+sensoro <- sensoro %>%
+  mutate(across(where(is.character), as.numeric))
+
+sensoro <- sensoro %>% filter(rowSums(is.na(sensoro[, -ncol(sensoro)])) < (ncol(sensoro) - 1))
+
+sensoro_centinela <- sensoro
+
+fechas_con_na <- sensoro %>%
+  filter(if_any(everything(), is.na)) %>%
+  pull(fecha)
+
+fechas_con_na
+
+sensoro <- sensoro %>%
+  filter(!(fecha %in% fechas_con_na))
+
+length(unique(sensoro$fecha))
+
+sensoro <- sensoro %>%
+  drop_na()
+```
+
+```{r}
+conteo <- sensoro %>%
+  group_by(fecha) %>%
+  summarise(filas = n(), .groups = "drop")
+```
+
+
+#lo mismo para el sensor de bajo coste
+```{r}
+for (i in 1:length(lista_medias)) {
+  lista_medias[[i]] <- lista_medias[[i]] %>%
+    filter(!(as.Date(fecha) %in% fechas_con_na)) # Filtrar las fechas no deseadas
+}
+```
+
+
+#comprobamos
+```{r}
+sapply(lista_medias, function(a) identical(sensoro$fecha, a$fecha))
+
+```
+
+#contamos el porcentaje de dias del que me he deshecho
+```{r}
+# Convertir a formato Date si aún no lo están
+sensoro$fecha <- as.Date(sensoro$fecha)  
+
+# Crear el rango de fechas completo
+fechas_presentes <- sensoro$fecha  # O df2$fecha, es lo mismo
+rango_fechas <- seq(min(fechas_presentes), max(fechas_presentes), by = "day")  # Rango de fechas completo
+
+# Encontrar días faltantes
+fechas_faltantes <- setdiff(rango_fechas, fechas_presentes)
+df_faltantes <- data.frame(fecha = as.Date(fechas_faltantes))  # Convertir fechas faltantes a Date
+
+# Graficar
+ggplot() +
+  geom_line(data = data.frame(fecha = rango_fechas), aes(x = fecha, y = 1), color = "gray") +  # Línea completa
+  geom_point(data = df_faltantes, aes(x = fecha, y = 1), color = "red", size = 3) +  # Días faltantes en rojo
+  labs(title = "Días Faltantes en la Línea Temporal",
+       x = "Fecha",
+       y = "",
+       caption = "Puntos rojos indican días faltantes") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+
+total_dias <- length(rango_fechas)  # Total de días en el rango
+total_dias
+dias_faltantes <- length(fechas_faltantes)  # Días faltantes
+dias_faltantes
+porcentaje_faltantes <- (dias_faltantes / total_dias) * 100  # Porcentaje de días faltantes
+
+# Mostrar el porcentaje de días faltantes
+cat("Porcentaje de días faltantes:", round(porcentaje_faltantes, 2), "%\n")
+```
+
+De esta manera tenemos la misma cantidad de filas por modulo y sensor oficial, haciendo un total de 144 muestras por dia(cada 10 min) y 228 dias.
+
+#Tamaños
+```{r}
+length(unique(sensoro$fecha))
+length(unique(lista_medias[["modid_5"]]$fecha))
+
+
+# Asegúrate de que las fechas estén en formato Date
+sensoro$fecha <- as.Date(sensoro$fecha)
+
+# Asegúrate de que las fechas en 'lista_medias' también estén en formato Date
+lista_medias_modid_5 <- lista_medias[["modid_5"]]
+lista_medias_modid_5$fecha <- as.Date(lista_medias_modid_5$fecha)
+
+# Crear DataFrame combinado para graficar
+df_combinado <- data.frame(
+  fecha = c(sensoro$fecha, lista_medias_modid_5$fecha),
+  valor = c(rep(1, length(sensoro$fecha)), rep(2, length(lista_medias_modid_5$fecha))), # Usamos '1' para sensoro y '2' para modid_5
+  fuente = c(rep("Sensoro", length(sensoro$fecha)), rep("Modid 5", length(lista_medias_modid_5$fecha))) 
+)
+
+# Crear gráfico de línea para ambas series temporales
+ggplot(df_combinado, aes(x = fecha, group = fuente, color = fuente)) +
+  geom_line(stat = "count", size = 1) +  # Dibuja las líneas temporales para ambas
+  labs(title = "Comparación de las líneas temporales entre Sensoro y Modid 5",
+       x = "Fecha", y = "Conteo de Datos",
+       color = "Fuente de Datos") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+#NAs
+```{r}
+sum(is.na(sensoro))
+
+lapply(lista_medias, function(df) sum(is.na(df)))
+```
+
+
+Ahora que ya tenemos unificada la frecuencia vamos a descargarnos los datos en formato csv para aplicarles las conversiones necesarias para poder hacer un análisis exploratorio y aplicar un Random Forest en Jupyter
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Crear una lista para almacenar los datos combinados de PM2.5
+lista_comb <- list()
+
+# Añadir solo el módulo 5
+mod_data <- lista_medias[["modid_2"]]  # Seleccionar el módulo 5
+mod_data$modid <- "Módulo 5"  # Asignar nombre para el módulo
+
+# Calcular la media diaria de PM2.5 para el módulo 5
+mod_data_daily <- mod_data %>%
+  group_by(fecha) %>%
+  summarise(PM2.5 = mean(PM2.5, na.rm = TRUE), .groups = "drop")
+
+lista_comb[[1]] <- mod_data_daily  # Guardar solo las columnas relevantes
+
+# Unir todos los datos del módulo 5 (con media diaria) en un solo data.frame
+df_modulos <- do.call(rbind, lista_comb)
+
+# Añadir los datos del sensor oficial (media diaria de PM2.5)
+sensoro_oficial_daily <- sensoro %>%
+  select(fecha, PM2.5) %>%
+  group_by(fecha) %>%
+  summarise(PM2.5 = mean(PM2.5, na.rm = TRUE), .groups = "drop") %>%
+  mutate(modid = "Oficial")  # Añadir una columna para indicar que es el sensor oficial
+
+sensoro_oficial_daily <- sensoro_oficial_daily %>%
+  select(-ncol(sensoro_oficial_daily))  # Elimina la última columna
+
+
+# Unir los datos (módulo 5 + oficial) por la columna 'fecha'
+df_combinado <- merge(df_modulos, sensoro_oficial_daily, by = "fecha", all = TRUE)
+
+colnames(df_combinado) <- c("fecha", "a", "b")
+
+ggplot(df_combinado, aes(x = fecha)) +
+  geom_line(aes(y = a, color = "Módulo 5"), size = 1) +  # Línea para el módulo 5
+  geom_line(aes(y = b, color = "Oficial"), size = 1) +  # Línea para el sensor oficial
+  labs(title = "Comparación de PM2.5 (media diaria): Módulo 5 vs Oficial",
+       x = "Fecha", y = "PM2.5 (media diaria)") +
+  scale_color_manual(values = c("blue", "black")) +  # Azul para el módulo 5 y negro para el oficial
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+
+```
+
+
+#Guardado de ficheros
+```{r}
+# Crear carpeta si no existe
+if (!dir.exists("data_test")) dir.create("data_test")
+
+# Guardar cada módulo en archivos bajo_1.csv, ..., bajo_10.csv
+for (i in 1:10) {
+  file_name <- file.path("data_test", paste0("bajo_test_", i, ".csv"))
+  write.csv(lista_medias[[i]], file_name, row.names = FALSE)
+}
+
+# Guardar sensor oficial
+write.csv(sensoro, file.path("data_test", "oficial_test.csv"), row.names = FALSE)
+
+```
+

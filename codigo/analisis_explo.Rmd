@@ -1,0 +1,690 @@
+---
+title: "analisis"
+author: "Hugo Toledo Escrivá"
+date: "2025-06-16"
+output: html_document
+---
+LIBRERIAS
+
+```{r}
+library(readr)
+library(dplyr)
+library(data.table)
+library(tidyr)
+
+library(rvest)
+library(httr)
+
+library(ggplot2)
+library(plotly)
+
+library(broom)
+
+library(lubridate)
+
+library(readr)
+
+library(ggplot2)
+
+library(tidyr)
+library(dplyr)
+
+
+library(kernlab)
+library(mlbench)
+
+library(gridExtra)
+
+library(lubridate)
+```
+
+
+
+#Graficas variables sensor bajo coste
+```{r}
+
+archivos <- list.files(path = "data_convers/", pattern = "procesado.*\\.csv", full.names = TRUE)
+
+    
+```
+
+
+#Gráficas variables sensor oficial
+```{r}
+sensoro <- read_csv("data/oficial.csv")
+
+
+```
+
+
+#union de los 10 ficheros de bajo coste(uno por módulo)
+```{r}
+
+# Lista de archivos
+archivos <- list.files(path = "data_convers/", pattern = "procesado.*\\.csv", full.names = TRUE)
+
+# Leer todos los archivos y guardarlos en una lista
+lista_dfs <- lapply(archivos, read_csv)
+
+# Unificar todos los data.frames en uno solo
+df_unificado <- bind_rows(lista_dfs)
+
+```
+
+
+#Seleccionamos las variables a estudio más el módulo
+```{r}
+sensorb_filtrado <- df_unificado %>%
+  select(modid, PM1.0, PM2.5, PM10.0, O3, NO2, CO, VOC_cat, CH20, Tª, Humedad, CO2) #menos fecha y hora
+
+sensorb_filtrado <- as.data.frame(sensorb_filtrado)
+
+sensorb_filtrado <- sensorb_filtrado %>%
+  mutate(modid = as.factor(modid))
+
+```
+
+
+A continuación se van a mostrar diferentes gráficas prar ver las diferencias visualmnete. Escogeremos la media diaria de los 10 módulos para cada variable.
+
+Primero vamos a mediar los datos por dia para que se facilite la visualización
+
+
+#bajo coste por dia
+```{r}
+sensorb_media <- df_unificado %>%
+  group_by(fecha) %>%
+  summarise(across(c(Tª, Humedad, PM1.0, PM2.5, PM10.0, VOC_cat, CH20, CO2, CO, O3, NO2), mean, na.rm = TRUE))
+
+sensorb_media_long <- sensorb_media %>%
+  pivot_longer(cols = c(Tª, Humedad, PM1.0, PM2.5, PM10.0, VOC_cat, CH20, CO2, CO, O3, NO2), 
+               names_to = "variable", 
+               values_to = "media")
+
+```
+
+
+#Agrupamos por fecha y módulo
+```{r}
+sensorb_media_modid <- df_unificado %>%
+  group_by(fecha, modid) %>%
+  summarise(across(c(Tª, Humedad, PM1.0, PM2.5, PM10.0, VOC_cat, CH20, CO2, CO, O3, NO2), mean, na.rm = TRUE))
+```
+
+
+#Ahora mostramos
+```{r}
+# Crear la carpeta "imagenes" si no existe
+if (!dir.exists("imagenes")) dir.create("imagenes")
+
+# Variables a graficar
+variables <- c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0", "VOC_cat", "CH20", "CO2", "CO", "O3", "NO2")
+
+# Graficar para cada variable, mostrar en pantalla y guardar en PDF
+for (var in variables) {
+  plot <- ggplot(sensorb_media_modid, aes(x = fecha, y = get(var), color = as.factor(modid))) +
+    geom_line() +
+    labs(title = paste("Media de", var, "por día y módulo"),
+         x = "Fecha",
+         y = "Media",
+         color = "Módulo") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotar las fechas
+    scale_color_manual(values = rainbow(length(unique(sensorb_media_modid$modid))))  # Colores para cada módulo
+  
+  # Mostrar el gráfico en pantalla
+  print(plot)
+  
+  # Guardar el gráfico en formato PDF en la carpeta "imagenes"
+  ggsave(filename = file.path("imagenes", paste0("grafico_", var, ".pdf")), plot = plot, width = 10, height = 6)
+}
+
+
+```
+
+
+#Ahora añadimos la media diaria correspondiente al sensor oficial para las variables coinicidentes
+
+```{r}
+sensoro_media <- sensoro %>%
+  group_by(fecha) %>%
+  summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+
+```
+
+
+
+```{r}
+variables_con_oficial <- c("PM2.5", "O3", "NO2")
+```
+
+
+```{r}
+# Asegúrate de que ambas tablas tengan la columna de fecha en el mismo formato
+sensorb_media_modid$fecha <- as.Date(sensorb_media_modid$fecha)
+sensoro_media$fecha <- as.Date(sensoro_media$fecha)
+
+# Hacer un merge por fecha para asegurarte de que están alineados
+df_combinado <- merge(sensorb_media_modid, sensoro_media, by = "fecha", suffixes = c("_bajo_coste", "_oficial"))
+
+# Verificar las primeras filas del merge
+head(df_combinado) 
+
+```
+
+
+
+
+
+
+
+
+```{r}
+# Crear la carpeta "imagenes" si no existe
+if (!dir.exists("imagenes")) dir.create("imagenes")
+
+# Pares de variables para graficar
+pares <- list(
+  c("PM2.5", "PM2.5"),
+  c("O3", "Ozono"),
+  c("NO2", "NO2"),
+  c("Humedad", "HR"),
+  c("Tª", "TEMP")
+)
+
+# Paleta de colores personalizada
+modulos <- unique(sensorb_media_modid$modid)
+colores_modulos <- c(
+  "#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00",
+  "#FFFF33", "#A65628", "#F781BF", "#999999", "#66C2A5"
+)
+colores_seleccionados <- setNames(colores_modulos[1:length(modulos)], modulos)
+
+# Graficar las variables emparejadas
+for (par in pares) {
+  var_bajo_coste <- par[1]
+  var_oficial <- par[2]
+  
+  plot <- ggplot(sensorb_media_modid, aes(x = fecha, y = .data[[var_bajo_coste]], color = as.factor(modid))) +
+    geom_line(size = 0.7, alpha = 0.9) +
+    
+    # Línea oficial
+    geom_line(data = sensoro_media, aes(x = fecha, y = .data[[var_oficial]]),
+              color = "black", size = 0.9, alpha = 0.7, inherit.aes = FALSE) +
+    
+    labs(title = paste("Media diaria de", var_bajo_coste, "(bajo coste) vs", var_oficial, "(oficial)"),
+         x = "Fecha", y = "Valor", color = "Módulo") +
+    
+    scale_color_manual(values = colores_seleccionados) +
+    
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(hjust = 0.5))
+  
+  # Mostrar el gráfico en pantalla
+  print(plot)
+  
+  # Guardar en formato PDF
+  nombre_archivo <- paste0("grafico_", var_bajo_coste, "_vs_", var_oficial, ".pdf")
+  ggsave(filename = file.path("imagenes", nombre_archivo), plot = plot, width = 10, height = 6)
+}
+
+
+
+```
+
+
+Como se puede observar en los gráficos hay diferencias según módulos.
+
+Las variables menos claras son: CO2, CO, O3, NO2
+
+En un principio se valora que los datos no sean planos ya que significa que captan diferencias en el aire.
+
+
+#Correlaciones entre los sensores de cada módulo
+```{r}
+medicion_cols <- c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0", "VOC_cat", "CH20", "CO2", "CO", "O3", "NO2")
+
+# Si deseas calcular la correlación por cada "Modulo(ID)", puedes hacer un ciclo:
+correlation_by_model = {}
+
+correlation_list <- list()
+
+# Iterar sobre los valores únicos de "Modulo(ID)"
+for(mod_id in unique(sensorb_filtrado$modid)) {
+  
+  # Filtrar el DataFrame para el modelo específico
+  mod <- sensorb_filtrado %>% filter(modid == mod_id)
+  
+  # Calcular la matriz de correlación para las columnas de medición
+  correlation_matrix <- cor(mod[, medicion_cols], use = "complete.obs")
+  
+  # Guardar la matriz de correlación en la lista
+  correlation_list[[as.character(mod_id)]] <- correlation_matrix
+  
+  # Imprimir la matriz de correlación para este modelo
+  cat("\nCorrelación para Modulo(ID):", mod_id, "\n")
+  print(correlation_matrix)
+}
+```
+
+Vemos que los módulos: 1,2,3,4,8 son lo que tienen desviacion estandar 0 en el sesnor que mide el CO
+
+
+#Para saber si hay dependencia entre variables vamos a seleccionar las relacines mayores a 0.5
+```{r}
+
+library(xtable)
+
+# Definir las columnas de medición
+medicion_cols <- c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0", "VOC_cat", "CH20", "CO2", "CO", "O3", "NO2")
+
+# Crear una lista para guardar resultados
+high_correlation_list <- list()
+
+# Crear la carpeta "tablas" si no existe
+if (!dir.exists("tablas")) dir.create("tablas")
+
+# Iterar sobre los valores únicos de "modid"
+for(mod_id in unique(sensorb_filtrado$modid)) {
+  
+  # Filtrar el DataFrame para el módulo específico
+  mod <- sensorb_filtrado %>% filter(modid == mod_id)
+  
+  # Verificar si alguna columna tiene desviación estándar cero
+  sd_check <- sapply(mod[, medicion_cols], sd, na.rm = TRUE)
+  if (any(sd_check == 0)) {
+    warning("Algunas columnas tienen desviación estándar cero en ModuloID:", mod_id)
+    medicion_cols <- medicion_cols[!names(sd_check) %in% names(sd_check[sd_check == 0])]  # Eliminar columnas con desviación estándar 0
+  }
+  
+  # Calcular la matriz de correlación para las columnas de medición
+  correlation_matrix <- cor(mod[, medicion_cols], use = "complete.obs")
+  
+  # Encontrar las correlaciones mayores a 0.5 (y diferentes de 1, para evitar la diagonal)
+  high_correlation <- which(correlation_matrix > 0.5 & correlation_matrix < 1, arr.ind = TRUE)
+  
+  # Extraer los nombres de las variables con alta correlación
+  high_corr_pairs <- apply(high_correlation, 1, function(x) {
+    c(Var1 = rownames(correlation_matrix)[x[1]],
+      Var2 = colnames(correlation_matrix)[x[2]],
+      Correlation = correlation_matrix[x[1], x[2]])
+  })
+  
+  # Convertir los resultados en un DataFrame
+  high_corr_df <- as.data.frame(t(high_corr_pairs), stringsAsFactors = FALSE)
+  colnames(high_corr_df) <- c("Variable1", "Variable2", "Correlation")
+  
+  # Añadir los resultados a la lista con el nombre del módulo
+  high_correlation_list[[as.character(mod_id)]] <- high_corr_df
+  
+  # Guardar la tabla en formato LaTeX
+  if (nrow(high_corr_df) > 0) {
+    # Convertir la tabla a LaTeX
+    latex_table <- xtable(high_corr_df)
+    
+    # Guardar el archivo .tex en la carpeta "tablas"
+    file_name <- file.path("tablas", paste0("correlation_modid_", mod_id, ".tex"))
+    print(latex_table, file = file_name, type = "latex", include.rownames = FALSE)
+    
+    # Imprimir las relaciones de alta correlación para este módulo
+    cat("\nRelaciones de alta correlación para Modulo(ID):", mod_id, "\n")
+    print(high_corr_df)
+  } else {
+    cat("\nNo se encontraron relaciones de alta correlación para Modulo(ID):", mod_id, "\n")
+  }
+}
+
+
+
+
+```
+
+
+Vemos que en todos se cumple una correlación extremadamente alta en lo sensores de particulas, esto se debe a que el sensor mide solo 2.5 y de ahi estima 1 y 10
+
+Lo tendremos en cuenta a la hora de modelar en el futuro
+
+
+Vamos ahora a observar las diferencias entre las matrices de correlacion de los módulos para detectar los módulos 
+que más difieran y los que más se parezcan
+
+#cálculo de las diferencias entre las matrices de correlación
+```{r}
+
+# Función para calcular la diferencia media entre dos matrices de correlación
+compare_correlation_matrices <- function(corr_matrix1, corr_matrix2) {
+  # Reemplazar NA por 0 en ambas matrices antes de calcular la diferencia
+  diff_matrix <- abs((corr_matrix1 - corr_matrix2))
+  # Eliminar los valores NA que puedan existir después de la diferencia
+  diff_matrix[is.na(diff_matrix)] <- 0
+  return(mean(diff_matrix, na.rm = TRUE))  # Na.rm = TRUE para ignorar NA en el cálculo de la media
+}
+
+# Inicializar el DataFrame vacío para almacenar los resultados
+comparison_results <- data.frame(Modulo1 = character(), 
+                                 Modulo2 = character(), 
+                                 Mean_Difference = numeric(),
+                                 stringsAsFactors = FALSE)
+
+# Comparar todas las matrices de correlación entre módulos
+for(i in 1:(length(correlation_list)-1)) {
+  for(j in (i+1):length(correlation_list)) {
+    
+    # Obtener los nombres de los módulos
+    mod1 <- names(correlation_list)[i]
+    mod2 <- names(correlation_list)[j]
+    
+    # Obtener las matrices de correlación de los módulos
+    matrix1 <- correlation_list[[mod1]]
+    matrix2 <- correlation_list[[mod2]]
+    
+    # Verificar si las matrices de correlación tienen NA
+    if(any(is.na(matrix1)) || any(is.na(matrix2))) {
+      cat("\nAdvertencia: una de las matrices contiene NA (ModuloID", mod1, "y", mod2, ")\n")
+    }
+    
+    # Calcular la diferencia media entre las matrices
+    mean_diff <- compare_correlation_matrices(matrix1, matrix2)
+    
+    # Almacenar el resultado usando bind_rows (mejor que rbind)
+    comparison_results <- bind_rows(comparison_results, 
+                                    data.frame(Modulo1 = mod1, 
+                                               Modulo2 = mod2, 
+                                               Mean_Difference = mean_diff))
+  }
+}
+
+mas <- filter(comparison_results, comparison_results$Mean_Difference > 0.12)
+
+menos <- filter(comparison_results, comparison_results$Mean_Difference < 0.05)
+
+```
+
+
+# módulos que más y menos difieren
+```{r}
+mas$Modulo1
+mas$Modulo2  #modulos con mayores diferencias
+
+menos$Modulo1
+menos$Modulo2  #modulos con menores diferencias
+```
+
+
+
+Basanadono en las diferencias entre las matrices de correlacion calculadas anteriormente podemos deducir lo siguiente.
+Como vemos el modulo 7 es el que mas difiere de los 10, ya que sale en todas las diferencias superiores a un 10% y en ninguna inferior a 5%, esto ya muestra que hay
+una leve diferencia entre módulos. 
+
+
+
+Vamos ahora a ver los módulos que se ajusten mejor a los datos del sensor oficial y clasificarlos según fiabilidad.
+
+
+Para ello nos basaremos en las distancias
+
+#Distancias entre los datos de bajo coste y referencia
+```{r}
+
+# Función para calcular la distancia euclidiana entre un vector de datos y los valores de referencia
+calcular_distancia <- function(modulo, referencia) {
+  sqrt(sum((modulo - referencia)^2, na.rm = TRUE))
+}
+
+# Paso 2: Convertir todas las columnas de tipo carácter a numérico
+sensoro <- sensoro %>%
+  mutate(across(where(is.character), as.numeric))
+
+# Paso 1: Calcular las medias diarias para cada módulo en `sensorb`
+sensorb_diario <- df_unificado %>%
+  group_by(fecha, modid) %>%
+  summarise(across(c("Tª", "PM1.0", "PM2.5", "PM10.0", "O3", "NO2"), mean, na.rm = TRUE))
+
+sensoro_diario <- sensoro %>%
+  group_by(fecha) %>%
+  summarise(across(c("TEMP", "PM1", "PM2.5", "PM10", "Ozono", "NO2"), mean, na.rm = TRUE))
+
+# Renombrar las columnas de sensoro_diario para que coincidan con los nombres de sensorb_diario
+sensoro_diario <- sensoro_diario %>%
+  rename(
+    Tª = TEMP,
+    "PM1.0" = PM1,
+    "PM2.5" = `PM2.5`,  # No es necesario renombrar, pero asegúrate de que sea consistente
+    "PM10.0" = PM10,
+    O3 = Ozono
+  )
+
+# Verificar que las columnas sean consistentes entre ambos dataframes
+colnames(sensorb_diario)
+colnames(sensoro_diario)
+
+
+# Paso 1: Unir los datos de `sensorb_diario` con los datos de referencia por fecha
+datos_comparados <- sensorb_diario %>%
+  left_join(sensoro_diario, by = "fecha", suffix = c("_modulo", "_referencia"))
+
+# Paso 2: Calcular la distancia euclidiana para cada variable en cada fecha
+# Vamos a calcular la distancia por cada variable de forma independiente
+calcular_distancia <- function(modulo, referencia) {
+  sqrt(sum((modulo - referencia)^2, na.rm = TRUE))
+}
+
+# Para cada variable, calculamos la distancia euclidiana
+distancias <- datos_comparados %>%
+  rowwise() %>%
+  mutate(
+    distancia_Tª = calcular_distancia(Tª_modulo, Tª_referencia),
+    distancia_PM1.0 = calcular_distancia(`PM1.0_modulo`, `PM1.0_referencia`),
+    distancia_PM2.5 = calcular_distancia(`PM2.5_modulo`, `PM2.5_referencia`),
+    distancia_PM10.0 = calcular_distancia(`PM10.0_modulo`, `PM10.0_referencia`),
+    distancia_O3 = calcular_distancia(O3_modulo, O3_referencia),
+    distancia_NO2 = calcular_distancia(NO2_modulo, NO2_referencia)
+  )
+
+
+# Paso 3: Agrupar por modid (módulo) y sumar las distancias para cada variable
+# Esto nos dará una suma de distancias por módulo para cada variable
+distancias_sumadas <- distancias %>%
+  group_by(modid) %>%
+  summarise(
+    distancia_total_Tª = sum(distancia_Tª, na.rm = TRUE),
+    distancia_total_PM1.0 = sum(distancia_PM1.0, na.rm = TRUE),
+    distancia_total_PM2.5 = sum(distancia_PM2.5, na.rm = TRUE),
+    distancia_total_PM10.0 = sum(distancia_PM10.0, na.rm = TRUE),
+    distancia_total_O3 = sum(distancia_O3, na.rm = TRUE),
+    distancia_total_NO2 = sum(distancia_NO2, na.rm = TRUE)
+  )
+
+# Paso 4: Ordenar por la distancia total y seleccionar los 3 módulos más cercanos por cada variable
+modulos_mas_cercanos_Tª <- distancias_sumadas %>%
+  arrange(distancia_total_Tª) %>%
+  slice_head(n = 3)
+
+modulos_mas_cercanos_PM1.0 <- distancias_sumadas %>%
+  arrange(distancia_total_PM1.0) %>%
+  slice_head(n = 3)
+
+modulos_mas_cercanos_PM2.5 <- distancias_sumadas %>%
+  arrange(distancia_total_PM2.5) %>%
+  slice_head(n = 3)
+
+modulos_mas_cercanos_PM10.0 <- distancias_sumadas %>%
+  arrange(distancia_total_PM10.0) %>%
+  slice_head(n = 3)
+
+modulos_mas_cercanos_O3 <- distancias_sumadas %>%
+  arrange(distancia_total_O3) %>%
+  slice_head(n = 3)
+
+modulos_mas_cercanos_NO2 <- distancias_sumadas %>%
+  arrange(distancia_total_NO2) %>%
+  slice_head(n = 3)
+
+# Ver los módulos más cercanos para cada variable
+modulos_mas_cercanos_Tª
+modulos_mas_cercanos_PM1.0
+modulos_mas_cercanos_PM2.5
+modulos_mas_cercanos_PM10.0
+modulos_mas_cercanos_O3
+modulos_mas_cercanos_NO2
+
+```
+
+
+De esta manera podemos ver para cada sensor, que módulo se acerca más a los datos de referencia
+
+
+
+modulos_mas_cercanos_Tª: 10,7,8
+
+modulos_mas_cercanos_PM1.0: 4,8,6
+
+modulos_mas_cercanos_PM2.5: 4,8,6
+
+modulos_mas_cercanos_PM10.0: 5,8,4
+
+modulos_mas_cercanos_O3: 6,3,4
+
+modulos_mas_cercanos_NO2: 8,5,4
+
+
+Los resultados me sorpenden un poco, el módulo 6 que es uno de los que más difiere de todos en uanto a correlacion aparece 5 de 6 veces en el top 3 mejores módulos
+
+Lo mismo pasa con el 8, si bien este no difiere tanto en correlaciones con los otros módulo, su sensor de CO no detecta variaciones
+
+El 5 no hace mal papel tampoco, enn base a esta data podemos en un futuro rankear tanto los módulos como los sensores
+
+
+#Desviaciones standar de las distancias a referencia
+```{r}
+# Paso 1: Unir los datos de `sensorb_diario` con los datos de referencia por fecha
+datos_comparados <- sensorb_diario %>%
+  left_join(sensoro_diario, by = "fecha", suffix = c("_modulo", "_referencia"))
+
+# Paso 2: Calcular la distancia euclidiana para cada variable en cada fecha
+calcular_distancia <- function(modulo, referencia) {
+  sqrt(sum((modulo - referencia)^2, na.rm = TRUE))
+}
+
+# Para cada variable, calculamos la distancia euclidiana
+distancias <- datos_comparados %>%
+  rowwise() %>%
+  mutate(
+    distancia_Tª = calcular_distancia(Tª_modulo, Tª_referencia),
+    distancia_PM1.0 = calcular_distancia(`PM1.0_modulo`, `PM1.0_referencia`),
+    distancia_PM2.5 = calcular_distancia(`PM2.5_modulo`, `PM2.5_referencia`),
+    distancia_PM10.0 = calcular_distancia(`PM10.0_modulo`, `PM10.0_referencia`),
+    distancia_O3 = calcular_distancia(O3_modulo, O3_referencia)
+  )
+
+# Paso 3: Agrupar por modid (módulo) y calcular la desviación estándar de las distancias por variable
+fiabilidad_modulos <- distancias %>%
+  group_by(modid) %>%
+  summarise(
+    desviacion_Tª = sd(distancia_Tª, na.rm = TRUE),
+    desviacion_PM1.0 = sd(distancia_PM1.0, na.rm = TRUE),
+    desviacion_PM2.5 = sd(distancia_PM2.5, na.rm = TRUE),
+    desviacion_PM10.0 = sd(distancia_PM10.0, na.rm = TRUE),
+    desviacion_O3 = sd(distancia_O3, na.rm = TRUE)
+  )
+
+# Paso 4: Calcular una medida global de fiabilidad (puedes usar la media de las desviaciones estándar de cada variable)
+fiabilidad_modulos <- fiabilidad_modulos %>%
+  mutate(
+    fiabilidad_total = rowMeans(select(., starts_with("desviacion")), na.rm = TRUE)
+  )
+
+# Paso 5: Ordenar los módulos por fiabilidad (menor desviación estándar global)
+modulos_mas_fiables <- fiabilidad_modulos %>%
+  arrange(fiabilidad_total) %>%
+  slice_head(n = 10)
+
+# Ver los módulos más fiables
+print(modulos_mas_fiables)
+
+
+latex_table <- xtable(modulos_mas_fiables)
+
+# Guardar la tabla en formato .tex con print.xtable
+print(latex_table, file = "tablas/modulos_mas_fiables.tex", type = "latex", include.rownames = FALSE)
+```
+
+
+#Ahora vamos a ver la variables más cercanas a los valores de referencia
+```{r}
+# Paso 1: Unir los datos de `sensorb_diario` con los datos de referencia por fecha
+datos_comparados <- sensorb_diario %>%
+  left_join(sensoro_diario, by = "fecha", suffix = c("_modulo", "_referencia"))
+
+# Paso 2: Calcular la distancia euclidiana para cada variable en cada fecha
+calcular_distancia <- function(modulo, referencia) {
+  sqrt(sum((modulo - referencia)^2, na.rm = TRUE))
+}
+
+# Para cada variable, calculamos la distancia euclidiana
+distancias <- datos_comparados %>%
+  rowwise() %>%
+  mutate(
+    distancia_Tª = calcular_distancia(Tª_modulo, Tª_referencia),
+    distancia_PM1.0 = calcular_distancia(`PM1.0_modulo`, `PM1.0_referencia`),
+    distancia_PM2.5 = calcular_distancia(`PM2.5_modulo`, `PM2.5_referencia`),
+    distancia_PM10.0 = calcular_distancia(`PM10.0_modulo`, `PM10.0_referencia`),
+    distancia_O3 = calcular_distancia(O3_modulo, O3_referencia),
+    distancia_NO2 = calcular_distancia(NO2_modulo, NO2_referencia)
+  )
+
+
+# Eliminar filas con NA en las distancias
+distancias_limpias <- distancias %>%
+  drop_na(distancia_Tª, distancia_PM1.0, distancia_PM2.5, distancia_PM10.0, distancia_O3, distancia_NO2)
+
+# Recalcular la desviación estándar después de eliminar los NA
+desviaciones_por_variable <- distancias_limpias %>%
+  summarise(
+    desviacion_Tª = sd(distancia_Tª, na.rm = TRUE),
+    desviacion_PM1.0 = sd(distancia_PM1.0, na.rm = TRUE),
+    desviacion_PM2.5 = sd(distancia_PM2.5, na.rm = TRUE),
+    desviacion_PM10.0 = sd(distancia_PM10.0, na.rm = TRUE),
+    desviacion_O3 = sd(distancia_O3, na.rm = TRUE),
+    desviacion_NO2 = sd(distancia_NO2, na.rm = TRUE),
+    .groups = "drop"  # Eliminar el agrupamiento
+  )
+
+# Paso 4: Ordenar las variables por su desviación estándar (menor desviación significa mejor ajuste)
+desviaciones_por_variable_ordenadas <- desviaciones_por_variable %>%
+  pivot_longer(cols = starts_with("desviacion"), names_to = "variable", values_to = "desviacion") %>%
+  arrange(desviacion)
+
+# Ver las variables con mejor ajuste a los valores de referencia
+print(desviaciones_por_variable_ordenadas)
+
+```
+
+
+Aqui se venn ordenadas, es lógico que al temperatura sea la que menos sd tenga.
+
+
+#Por último vamos a ver la correlacion directa entre módulos
+```{r}
+# Definir las columnas de medición
+medicion_cols <- c("Tª", "Humedad", "PM1.0", "PM2.5", "PM10.0", "VOC_cat", "CH20", "CO2", "CO", "O3", "NO2")
+
+# Calcular las estadísticas resumen por módulo
+resumen_por_modulo <- df_unificado %>%
+  group_by(modid) %>%
+  summarize(across(all_of(medicion_cols), mean, na.rm = TRUE), .groups = "drop")
+
+# Calcular la matriz de correlación entre módulos
+# Convertir el DataFrame a matriz excluyendo la columna ModuloID
+correlation_between_modules <- cor(t(as.matrix(resumen_por_modulo[,-1])), use = "complete.obs")
+
+# Imprimir la matriz de correlación
+cat("\nMatriz de correlación entre módulos:\n")
+print(correlation_between_modules)
+
+```
+
+
+
