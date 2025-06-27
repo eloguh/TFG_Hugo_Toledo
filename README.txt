@@ -4,7 +4,7 @@ Fecha: Junio 2025
 
 Estructura del Proyecto:
 -------------------------
-1. **memoria_Hugo_Toledo_Escriva.pdf**: Documento completo del TFG.
+1. **Memoria_Hugo_Toledo_Escriva.pdf**: Documento completo del TFG.
 2. **codigo/**: Ficheros con código fuente y notebooks utilizados en el trabajo.
     - **R/**: Scripts en R (preprocesamiento, análisis exploratorio, etc.)
     - **Python/**: Notebooks en Python (modelado supervisado, XGBoost, etc.)
